@@ -1282,58 +1282,6 @@ LispWorks GP:DRAW-PATH."
     "unicode-bidi"                 "vector-effect"              "visibility"                  "white-space"
     "word-spacing"                 "writing-mode"               ))
 
-(defun svg-parse-attribute-by-name (key val state container-attributes root-node)
-  "A helper function for parsing the value of a field to corresponding data type."
-  (string-case (key)
-    ("stroke"
-     (when val
-       (string-case (val)
-         ("context-fill"
-          (setq val (gethash "fill" container-attributes)))
-         ("context-stroke"
-          (setq val (gethash "stroke" container-attributes)))
-         (t nil)))
-     (cond ((member val '(nil "auto" "none") :test #'equalp) nil)
-           ((search "url" val) (css-parse-url val root-node))
-           (t (css-parse-color val))))
-    ("fill"
-     (when val
-       (string-case (val)
-         ("context-fill"
-          (setq val (gethash "fill" container-attributes)))
-         ("context-stroke"
-          (setq val (gethash "stroke" container-attributes)))
-         (t nil)))
-     (cond ((member val '(nil "auto") :test #'equalp) (make-rgb 0 0 0))
-           ((string-equal val "none") nil)
-           ((search "url" val) (css-parse-url val root-node))
-           (t (css-parse-color val))))
-    ("stroke-dasharray" (when (stringp val)
-                          (rectangle-bind (x y w h)
-                              (gethash "viewBox" container-attributes)
-                            (declare (ignore x y))
-                            (map 'vector #'round
-                                 (css-parse-all-length-from-string
-                                  state val :width w h
-                                  (gethash "width" container-attributes)
-                                  (gethash "height" container-attributes))))))
-    ("fill-rule" (if (stringp val) (if (string-equal val "nonzero") :winding :even-odd) (or val :winding)))
-    (t (cond ((member key '("x" "y" "width" "height" "stroke-width" "r" "rx" "ry" "cx" "cy" "x1" "y1" "x2" "y2")
-                      :test #'string-equal)
-              (when val
-                (if (stringp val)
-                  (rectangle-bind (x y w h)
-                      (gethash "viewBox" container-attributes)
-                    (declare (ignore x y))
-                    (css-parse-length
-                     state val
-                     (if (or (find #\y key) (search "height" key)) :height :width)
-                     w h
-                     (gethash "width" container-attributes)
-                     (gethash "height" container-attributes)))
-                  val)))
-             (t val)))))
-
 (defun draw-lw-path-to-vecto-state (state lw-path)
   (flet ((draw-sub-path (p)
            (case (first p)
@@ -1563,21 +1511,14 @@ element."
                                (css-parse-transforms state grad-trans w h
                                                      (gethash "width" container-attributes)
                                                      (gethash "height" container-attributes)))
-                         (setq grad-trans (make-transform))))
-                     (rectangle-bind (x y w h)
-                         (gethash "viewBox" container-attributes)
-                       (declare (ignore x y))
+                         (setq grad-trans (make-transform)))
                        (let* ((grad (svg-parse-gradient fill 0 0 w h))
                               (rev-grad-trans (vecto::invert-matrix (coerce grad-trans 'vector)))
                               (fill-source (lambda (x y)
                                              (multiple-value-bind (origin-x origin-y)
                                                  (vecto::transform-coordinates x y rev-grad-trans)
                                                (let ((color (svg-gradient-color origin-x origin-y grad)))
-                                                 (values (vecto::float-octet (color-red color))
-                                                         (vecto::float-octet (color-green color))
-                                                         (vecto::float-octet (color-blue color))
-                                                         (vecto::float-octet (color-alpha color))))))))
-                       
+                                                 (values-list (map 'list #'vecto::float-octet (subseq color 1))))))))
                          (lambda (state)
                            (let ((state (vecto::copy state)))
                              (setf (vecto::line-width state) stroke-width
@@ -1592,12 +1533,10 @@ element."
                              (if (eq fill-rule :even-odd)
                                (vecto::draw-even-odd-filled-paths state)
                                (vecto::draw-filled-paths state))
-                             (vecto::stroke)
-                             (setf (vecto::stroke-color state) (lw-color-to-vecto stroke))
-                             (vecto::draw-stroked-paths state))
-                           (when stroke
-                             (setf (vecto::stroke-color state) (lw-color-to-vecto stroke))
-                             (vecto::draw-stroked-paths state))))))
+                             (when stroke
+                               (setf (vecto::stroke-color state) (lw-color-to-vecto stroke))
+                               (vecto::draw-stroked-paths state)))
+                           ))))
                    ;; No gradient, yield normal drawing function
                    (lambda (state)
                      (let ((state (vecto::copy state)))
@@ -1697,7 +1636,7 @@ element."
                                          mid-y (/ (the double-float (+ min-y max-y)) 2d0)))
                      (vector-push (list :close) path)
                      (run-draw-path mid-x mid-y path)))
-        (t (when (member tag '("a" "clipPath" "defs" "g" "marker" "mask" "pattern" "svg" "switch" "symbol" "unknown" "use")
+        (t (when (member tag '("a" "clipPath" "g" "mask" "pattern" "svg" "switch" "unknown" "use")
                          :test #'string=)
              (let ((new-table (copy-hash-table container-attributes)))
                (maphash (lambda (k v) (setf (gethash k new-table) v))
@@ -1714,26 +1653,24 @@ element."
                  ("svg"
                   (let ((viewbox (if-let (val (gethash "viewBox" new-attrs))
                                      (coerce (css-parse-all-numbers-from-string val) 'list)
-                                   nil)))
+                                   (list 0 0 (vecto::width state) (vecto::height state)))))
                     (rectangle-bind (viewbox-l viewbox-t viewbox-w viewbox-h)
                         viewbox
-                      (declare (type double-float viewbox-l viewbox-t viewbox-w viewbox-h))
                       (let* ((new-x (if-let (val (gethash "x" new-attrs))
-                                        (svg-parse-attribute-by-name "x" val state container-attributes root-node)
+                                        (svg-parse-length val :width)
                                       0d0))
                              (new-y (if-let (val (gethash "y" new-attrs))
-                                        (svg-parse-attribute-by-name "y" val state container-attributes root-node)
+                                        (svg-parse-length val :height)
                                       0d0))
-                             (new-w (svg-parse-attribute-by-name "width" (gethash "width" new-attrs) state container-attributes root-node))
-                             (new-h (svg-parse-attribute-by-name "height" (gethash "height" new-attrs) state container-attributes root-node))
+                             (new-w (svg-parse-length (gethash "width" new-attrs) :width))
+                             (new-h (svg-parse-length (gethash "height" new-attrs) :height))
                              (transform (make-transform))
                              (preserve-aspect (if-let (val (gethash "preserveAspectRatio" new-attrs))
                                                   (split-sequence #\Space val)
                                                 '("xMidYMid" "meet")))
                              (align (first preserve-aspect))
                              (scale (or (second preserve-aspect) "meet")))
-                        (declare (type double-float new-x new-y)
-                                 (type string align scale))
+                        (declare (type string align scale))
                         (cond ((and (null new-w) new-h) (setq new-w new-h))
                               ((and new-w (null new-h)) (setq new-h new-w))
                               ((null new-h) (setq new-w viewbox-w new-h viewbox-h)))
@@ -1748,24 +1685,23 @@ element."
                             (apply-translation transform new-x new-y))
                           (let* ((xalign (subseq align 0 4))
                                  (yalign (subseq align 4 8))
-                                 (svg-align-x 0d0)
-                                 (svg-align-y 0d0)
-                                 (viewbox-align-x 0d0)
-                                 (viewbox-align-y 0d0))
-                            (declare (type double-float svg-align-x svg-align-y viewbox-align-x viewbox-align-y)
-                                     (type string xalign yalign))
+                                 (svg-align-x 0)
+                                 (svg-align-y 0)
+                                 (viewbox-align-x 0)
+                                 (viewbox-align-y 0))
+                            (declare (type string xalign yalign))
                             (string-case (xalign)
                               ("xMin" (setq svg-align-x new-x
                                             viewbox-align-x viewbox-l))
-                              ("xMid" (setq svg-align-x (+ new-x (/ new-w 2d0))
-                                            viewbox-align-x (+ viewbox-l (/ viewbox-w 2d0))))
+                              ("xMid" (setq svg-align-x (+ new-x (/ new-w 2))
+                                            viewbox-align-x (+ viewbox-l (/ viewbox-w 2))))
                               ("xMax" (setq svg-align-x (+ new-x new-w)
                                             viewbox-align-x (+ viewbox-l viewbox-w))))
                             (string-case (yalign)
                               ("YMin" (setq svg-align-y new-y
                                             viewbox-align-y viewbox-t))
-                              ("YMid" (setq svg-align-y (+ new-y (/ new-h 2d0))
-                                            viewbox-align-y (+ viewbox-t (/ viewbox-h 2d0))))
+                              ("YMid" (setq svg-align-y (+ new-y (/ new-h 2))
+                                            viewbox-align-y (+ viewbox-t (/ viewbox-h 2))))
                               ("YMax" (setq svg-align-y (+ new-y new-h)
                                             viewbox-align-y (+ viewbox-t viewbox-h))))
                             ;; Apply scaling, and align selected points
@@ -1816,10 +1752,10 @@ element."
                   (let* ((id (string-left-trim '(#\#) (or (gethash "href" new-attrs)
                                                           (gethash "xlink:href" new-attrs))))
                          (new-x (if-let (val (gethash "x" new-attrs))
-                                    (svg-parse-attribute-by-name "x" val state container-attributes root-node)
+                                    (svg-parse-length val :width)
                                   0d0))
                          (new-y (if-let (val (gethash "y" new-attrs))
-                                    (svg-parse-attribute-by-name "y" val state container-attributes root-node)
+                                    (svg-parse-length val :height)
                                   0d0))
                          (transform (if-let (val (gethash "svg-transform" container-attributes))
                                         (copy-transform val)
@@ -1828,7 +1764,7 @@ element."
                          ; Make a shadow tree
                          (shadow-child (make-instance 'plump:element
                                                       :parent node
-                                                      :tag-name (plump:tag-name child)
+                                                      :tag-name "g"
                                                       :children (plump:make-child-array)
                                                       :attributes (plump:attributes node))))
                     (declare (type double-float new-x new-y))
