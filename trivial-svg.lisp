@@ -52,6 +52,20 @@
                   collect `(,var (nth ,i ,lst)))
          ,@body))))
 
+;; Why I'm prefer using CL's convention `NFOO` but not Scheme's `FOO!` XD...
+(defun nmerge-tables (table &rest tables)
+  "Merge values of hash-tables in TABLES into TABLE. TABLE will be modified.
+
+From serapeum's `merge-tables!`"
+  (declare (optimize (speed 3)))
+  (reduce (lambda (ht1 ht2)
+            (maphash (lambda (k v)
+                       (setf (gethash k ht1) v))
+                     ht2)
+            ht1)
+          tables
+          :initial-value table))
+
 ;; HARLEQUIN-COMMON-LISP:STRING-TRIM-WHITESPACE
 (defalias string-trim-whitespace #'serapeum:trim-whitespace)
 
@@ -218,6 +232,19 @@
   (apply-rotation transform theta)
   (apply-translation transform x y))
 
+;; Fonts
+
+;; GP:GET-CHAR-WIDTH, GP:GET-FONT-HEIGHT, similar function using vecto & zpb-ttf
+(defun get-char-width (char loader size)
+  (let* ((scale (vecto::loader-font-scale size loader))
+         (glyph (zpb-ttf:find-glyph char loader)))
+    (* (zpb-ttf:advance-width glyph) scale)))
+
+(defun get-char-height (char loader size)
+  (let* ((scale (vecto::loader-font-scale size loader))
+         (glyph (zpb-ttf:find-glyph char loader)))
+    (* (zpb-ttf:advance-height glyph) scale)))
+
 ;; A small utility to find font file within system-installed fonts,
 ;; using font family name. Require fc-list on Linux.
 
@@ -279,20 +306,6 @@
         (or (find (string-append "/" family-or-file ".") fc-list :test #'search)
             (find family-or-file fc-list :test #'search))))
     *default-font-family*))
-
-;; Why I'm prefer using CL's convention `NFOO` but not Scheme's `FOO!` XD...
-(defun nmerge-tables (table &rest tables)
-  "Merge values of hash-tables in TABLES into TABLE. TABLE will be modified.
-
-From serapeum's `merge-tables!`"
-  (declare (optimize (speed 3)))
-  (reduce (lambda (ht1 ht2)
-            (maphash (lambda (k v)
-                       (setf (gethash k ht1) v))
-                     ht2)
-            ht1)
-          tables
-          :initial-value table))
 
 
 ;; (Partial) CSS parser
@@ -1344,16 +1357,6 @@ LispWorks GP:DRAW-PATH."
 
 (defvar *css-collapse-whitespace-scanner*
   (ppcre:create-scanner "\\s{2,}"))
-
-(defun get-char-width (char loader size)
-  (let* ((scale (vecto::loader-font-scale size loader))
-         (glyph (zpb-ttf:find-glyph char loader)))
-    (* (zpb-ttf:advance-width glyph) scale)))
-
-(defun get-char-height (char loader size)
-  (let* ((scale (vecto::loader-font-scale size loader))
-         (glyph (zpb-ttf:find-glyph char loader)))
-    (* (zpb-ttf:advance-height glyph) scale)))
 
 (defun create-renderer (state node &optional (root-node node) (container-attributes (make-hash-table :test #'equalp)))
   "Compile a SVG DOM element into a \"renderer\" function, which can
