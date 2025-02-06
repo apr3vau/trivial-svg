@@ -227,34 +227,57 @@
   #+(and unix (not darwin)) "Liberation Sans")
 
 (defun get-font-file (&optional family-or-file)
-  (declare (ignore pane))
   (if family-or-file 
     (when (or (not (or (pathname-directory family-or-file)
                        (pathname-type family-or-file)))
               (not (probe-file family-or-file)))
       #+mswindows
-      (setq family-or-file (or (find-if (lambda (file)
-                                          (member (pathname-type file) '("ttf" "ttc" "otf" "otc")
-                                                  :test #'string=))
-                                        (directory (make-pathname :name family-or-file :type :wild :defaults #P"C:/Windows/Fonts/")))
-                               *default-font-family*))
+      (or (find-if (lambda (file)
+                     (member (pathname-type file) '("ttf" "ttc" "otf" "otc")
+                             :test #'string=))
+                   (directory (make-pathname :name family-or-file :type :wild :defaults #P"C:/Windows/Fonts/")))
+          *default-font-family*)
       #+darwin
-      (setq family-or-file (or (find-if (lambda (file)
-                                          (member (pathname-type file) '("ttf" "ttc" "otf" "otc")
-                                                  :test #'string=))
-                                        (directory (make-pathname :name family-or-file :type :wild :defaults #P"/System/Library/Fonts/")))
-                               *default-font-family*))
+      (or (find-if (lambda (file)
+                     (member (pathname-type file) '("ttf" "ttc" "otf" "otc")
+                             :test #'string=))
+                   (directory (make-pathname :name family-or-file :type :wild :defaults #P"/System/Library/Fonts/")))
+          *default-font-family*)
       #+(and unix (not darwin))
       (let ((fc-list (mapcar (lambda (str) (first (split-sequence #\: str)))
                              (split-sequence
                               #\Newline 
                               (with-output-to-string (*standard-output*)
                                 (uiop:run-program "fc-list" :output t))))))
-        (setq family-or-file (or (find (string-append "/" family-or-file ".") fc-list :test #'search)
-                                 (find family-or-file fc-list :test #'search)
-                                 (find *default-font-description* fc-list :test #'search)
-                                 (error "Cannot find available font. Please give a pathname to :FAMILY"))))
-      family-or-file)
+        (or (find (string-append "/" family-or-file ".") fc-list :test #'search)
+            (find family-or-file fc-list :test #'search)
+            (find *default-font-description* fc-list :test #'search)
+            (error "Cannot find available font. Please give a pathname to :FAMILY"))))
+    *default-font-family*))
+
+(defun find-matching-font (family-or-file)
+  (if family-or-file 
+    (when (or (not (or (pathname-directory family-or-file)
+                       (pathname-type family-or-file)))
+              (not (probe-file family-or-file)))
+      #+mswindows
+      (find-if (lambda (file)
+                 (member (pathname-type file) '("ttf" "ttc" "otf" "otc")
+                         :test #'string=))
+               (directory (make-pathname :name family-or-file :type :wild :defaults #P"C:/Windows/Fonts/")))
+      #+darwin
+      (find-if (lambda (file)
+                 (member (pathname-type file) '("ttf" "ttc" "otf" "otc")
+                         :test #'string=))
+               (directory (make-pathname :name family-or-file :type :wild :defaults #P"/System/Library/Fonts/**/")))
+      #+(and unix (not darwin))
+      (let ((fc-list (mapcar (lambda (str) (first (split-sequence #\: str)))
+                             (split-sequence
+                              #\Newline 
+                              (with-output-to-string (*standard-output*)
+                                (uiop:run-program "fc-list" :output t))))))
+        (or (find (string-append "/" family-or-file ".") fc-list :test #'search)
+            (find family-or-file fc-list :test #'search))))
     *default-font-family*))
 
 ;; Why I'm prefer using CL's convention `NFOO` but not Scheme's `FOO!` XD...
@@ -1319,6 +1342,19 @@ LispWorks GP:DRAW-PATH."
                  :blue (color-blue color)
                  :alpha (color-alpha color)))
 
+(defvar *css-collapse-whitespace-scanner*
+  (ppcre:create-scanner "\\s{2,}"))
+
+(defun get-char-width (char loader size)
+  (let* ((scale (vecto::loader-font-scale size loader))
+         (glyph (zpb-ttf:find-glyph char loader)))
+    (* (zpb-ttf:advance-width glyph) scale)))
+
+(defun get-char-height (char loader size)
+  (let* ((scale (vecto::loader-font-scale size loader))
+         (glyph (zpb-ttf:find-glyph char loader)))
+    (* (zpb-ttf:advance-height glyph) scale)))
+
 (defun create-renderer (state node &optional (root-node node) (container-attributes (make-hash-table :test #'equalp)))
   "Compile a SVG DOM element into a \"renderer\" function, which can
 draw the SVG to the specified STATE.
@@ -1465,6 +1501,36 @@ element."
                (svg-parse-length
                 (get-attr name)
                 (if (or (find #\y name) (search "height" name)) :height :width)))
+             (get-font ()
+               (let* ((family (get-attr "font-family"))
+                      (size (if-let (size (get-attr "font-size"))
+                                (round (svg-parse-length size :width))
+                              (vecto::size (vecto::font state))))
+                      (loader (vecto::loader (vecto::font state))))
+                 (when family
+                   (let ((subs (split-sequence-if (lambda (c) (member c '(#\, #\Space #\"))) family
+                                                  :remove-empty-subseqs t)))
+                     (dolist (sub subs)
+                       (string-case (sub)
+                         ("serif"
+                          #+(or mswindows darwin) (setq family "Times New Roman")
+                          #-(or mswindows darwin) (setq family "Liberation Serif")
+                          (return))
+                         ("sans-serif"
+                          #+mswindows (setq family "Arial")
+                          #+darwin (setq family ".AppleSystemUIFont")
+                          #-(or mswindows darwin) (setq family"Liberation Sans")
+                          (return))
+                         ("monospace"
+                          #+(or mswindows darwin) (setq family "Courier New")
+                          #-(or mswindows darwin) (setq family "Liberation Mono")
+                          (return))
+                         (t (when-let (file (find-matching-font sub))
+                              (setq family file)
+                              (return)))))
+                     (when (or (stringp family) (pathnamep family))
+                       (setq loader (vecto::%get-font state (get-font-file family))))))
+                 (values loader size)))
              (multiply-transforms-for-drawing (trans-origin-x trans-origin-y)
                (let ((transform (make-transform))
                      (svg-transform (gethash "svg-transform" container-attributes))
@@ -1564,7 +1630,98 @@ element."
                            (vecto::draw-stroked-paths state))
                          (when (not fill) ; Draw the path in default color if nether `fill` nor `stroke` specified.
                            (setf (vecto::stroke-color state) ())
-                           (vecto::draw-stroked-paths state)))))))))
+                           (vecto::draw-stroked-paths state))))))))
+             (collapse-whitespace-around-children (node)
+               (let ((children (plump:children node))
+                     (space (gethash "text-space" container-attributes)))
+                 (unless (equalp space "preserve")
+                   (let ((start (aref children 0))
+                         (end (aref children (1- (length children)))))
+                     (when (plump-dom:text-node-p start)
+                       (setf (plump:text start) (string-left-trim '(#\Space #\Tab #\Return #\Newline) (plump:text start))))
+                     (when (plump-dom:text-node-p end)
+                       (setf (plump:text end) (string-right-trim '(#\Space #\Tab #\Return #\Newline) (plump:text end))))))))
+             (draw-a-character (char font-loader size transform)
+               ;; FIXME: i18n for :lr and :tb
+               (let* ((text-x (pop (gethash "text-x" container-attributes)))
+                      (shift-x (pop (gethash "text-dx" container-attributes)))
+                      (text-y (pop (gethash "text-y" container-attributes)))
+                      (shift-y (pop (gethash "text-dy" container-attributes)))
+                      (rotate (pop (gethash "text-rotate" container-attributes)))
+                      (x1 (or text-x
+                              (+ (or (gethash "text-prev-x" container-attributes) 0)
+                                 (or (gethash "text-total-width" container-attributes) 0))))
+                      (dx1 (or shift-x
+                               (gethash "text-prev-dx" container-attributes)
+                               0))
+                      (y1 (or text-y
+                              (+ (or (gethash "text-prev-y" container-attributes) 0)
+                                 (or (gethash "text-total-height" container-attributes) 0))))
+                      (dy1 (or shift-y
+                               (gethash "text-prev-dy" container-attributes)
+                               0))
+                      (r1 (or rotate
+                              (gethash "text-prev-rotate" container-attributes)
+                              0))
+                      (x (+ x1 dx1))
+                      (y (+ y1 dy1))
+                      (char-width (get-char-width char font-loader size))
+                      (char-height (get-char-height char font-loader size))
+                      (fill (get-fill)))
+                 (when text-x
+                   (setf (gethash "text-prev-x" container-attributes) text-x
+                         (gethash "text-total-width" container-attributes) 0))
+                 (when text-y
+                   (setf (gethash "text-prev-y" container-attributes) text-y
+                         (gethash "text-total-height" container-attributes) 0))
+                 (when rotate
+                   (setf (gethash "text-prev-rotate" container-attributes) rotate))
+                 (case (gethash "writing-mode" container-attributes)
+                   (:lr
+                    (setf (gethash "text-total-width" container-attributes)
+                          (+ (gethash "text-total-width" container-attributes 0)
+                             char-width)))
+                   (:tb
+                    (setf (gethash "text-total-height" container-attributes)
+                          (+ (gethash "text-total-height" container-attributes 0)
+                             char-height))))
+                 (unless (serapeum:whitespacep char)
+                   (let ((new-transform (make-transform)))
+                     ;; ??? Why the path of string is mirrored @VECTO
+                     (apply-translation new-transform (- x) (- y))
+                     (apply-scale new-transform 1 -1)
+                     (apply-rotation new-transform r1)
+                     (apply-translation new-transform x y)
+                     (postmultiply-transforms new-transform transform)
+                     (setq new-transform (coerce new-transform 'vector))
+                     (lambda (state)
+                       (let ((state (vecto::copy state)))
+                         (vecto::%set-font state font-loader size)
+                         (setf (vecto::transform-matrix state) (if-let (old-trans (vecto::transform-matrix state))
+                                                                   (vecto::mult new-transform old-trans)
+                                                                 new-transform)
+                               (vecto::fill-color state) (lw-color-to-vecto fill))
+                         (vecto::%draw-string state x y (string char))))))))
+             (draw-a-text-node (text-node)
+               (let* ((transform (multiply-transforms-for-drawing
+                                  (or (gethash "text-start-x" container-attributes) 0)
+                                  (or (gethash "text-start-y" container-attributes) 0)))
+                      (space (gethash "text-space" container-attributes)))
+                 (multiple-value-bind (loader size) (get-font)
+                   (unless (equalp space "preserve")
+                     (setf (plump:text text-node)
+                           (ppcre:regex-replace-all
+                            *css-collapse-whitespace-scanner* (plump:text text-node)
+                            ;; FIXME: check i18n here
+                            (if (member (get-attr "lang") '("jp" "kr" "zh")
+                                        :test (lambda (lang str) (string-prefix-p str lang)))
+                              "" " "))))
+                   (when-let (funcs (loop for char across (plump:text text-node)
+                                          for func = (draw-a-character char loader size transform)
+                                          when func collect func))
+                     (lambda (state)
+                       (dolist (func funcs)
+                         (funcall func state))))))))
       (string-case (tag)
         ("path" (run-draw-path
                  0d0 0d0
@@ -1643,6 +1800,74 @@ element."
                                          mid-y (/ (the double-float (+ min-y max-y)) 2d0)))
                      (vector-push (list :close) path)
                      (run-draw-path mid-x mid-y path)))
+        ("text"
+         (let* ((children (plump-dom:children node))
+                (new-table (copy-hash-table container-attributes))
+                ;; FIXME: formal whitespace handling
+                (space (if-let (val (get-attr "white-space"))
+                           (if (string-prefix-p "pre" val) "preserve" "normal")
+                         (or (get-attr "space") (get-attr "xml:space")))))
+           (maphash (lambda (k v) (setf (gethash k new-table) v))
+                    new-attrs)
+           (setf (gethash "text-x" new-table) (svg-parse-all-length (gethash "x" new-attrs) :width)
+                 (gethash "text-y" new-table) (svg-parse-all-length (gethash "y" new-attrs) :height)
+                 (gethash "text-dx" new-table) (svg-parse-all-length (gethash "dx" new-attrs) :width)
+                 (gethash "text-dy" new-table) (svg-parse-all-length (gethash "dy" new-attrs) :height)
+                 (gethash "text-rotate" new-table) (coerce (css-parse-all-angels-from-string (gethash "rotate" new-attrs)) 'list)
+                 (gethash "text-space" new-table) space
+                 (gethash "writing-mode" new-table) :lr
+                 (gethash "text-start-x" new-table) (when-let (xs (gethash "text-x" new-table))
+                                                      (first xs))
+                 (gethash "text-start-y" new-table) (when-let (ys (gethash "text-y" new-table))
+                                                      (first ys)))
+           (setq container-attributes new-table)
+           (collapse-whitespace-around-children node)
+           (when-let (funcs (loop for child across children
+                                  for func = (cond ((plump-dom:textual-node-p child)
+                                                    (draw-a-text-node child))
+                                                   ((plump-dom:element-p child)
+                                                    (create-renderer state child root-node new-table)))
+                                  when func collect func))
+             (lambda (state)
+               (dolist (func funcs)
+                 (funcall func state))))))
+        ("tspan"
+         (let ((backup-attrs (loop for attr in (append 
+                                                       *svg-presentation-attributes*)
+                                   for val = (gethash attr new-attrs)
+                                   for old = (gethash attr container-attributes)
+                                   when val
+                                     do (setf (gethash attr container-attributes) val)
+                                     and collect (cons attr old))))
+           (dolist (attr '("text-x" "text-y" "text-dx" "text-dy"
+                           "text-rotate" "text-prev-rotate"))
+             (push (cons attr (gethash attr container-attributes)) backup-attrs))
+           (when-let (new (svg-parse-all-length (gethash "x" new-attrs) :width))
+             (setf (gethash "text-x" container-attributes) (append new (gethash "text-x" container-attributes)))
+             (unless (gethash "text-start-x" container-attributes)
+               (setf (gethash "text-start-x" container-attributes) (first new))))
+           (when-let (new (svg-parse-all-length (gethash "y" new-attrs) :height))
+             (setf (gethash "text-y" container-attributes) (append new (gethash "text-y" container-attributes)))
+             (unless (gethash "text-start-y" container-attributes)
+               (setf (gethash "text-start-y" container-attributes) (first new))))
+           (when-let (new (svg-parse-all-length (gethash "dx" new-attrs) :width))
+             (setf (gethash "text-dx" container-attributes) (append new (gethash "text-dx" container-attributes))))
+           (when-let (new (svg-parse-all-length (gethash "dy" new-attrs) :height))
+             (setf (gethash "text-dy" container-attributes) (append new (gethash "text-dy" container-attributes))))
+           (when-let (new (coerce (css-parse-all-angels-from-string (gethash "rotate" new-attrs)) 'list))
+             (setf (gethash "text-rotate" container-attributes) new))
+           (collapse-whitespace-around-children node)
+           (when-let (funcs (loop for child across (plump-dom:children node)
+                                  for func = (cond ((plump-dom:textual-node-p child)
+                                                    (draw-a-text-node child))
+                                                   ((plump-dom:element-p child)
+                                                    (create-renderer state child root-node container-attributes)))
+                                  when func collect func))
+             (prog1 (lambda (state)
+                      (dolist (func funcs)
+                        (funcall func state)))
+               (loop for (attr . val) in backup-attrs
+                     do (setf (gethash attr container-attributes) val))))))
         (t (when (member tag '("a" "clipPath" "g" "mask" "pattern" "svg" "switch" "unknown" "use")
                          :test #'string=)
              (let ((new-table (copy-hash-table container-attributes)))
@@ -1819,7 +2044,10 @@ using ZPNG:WRITE-PNG."
       (vecto::clear-state vecto::*graphics-state*))))
 
 (defparameter *interactive-tests*
-  '(("Path quadratic bezier" "https://www.w3.org/TR/2018/CR-SVG2-20181004/images/paths/quad01.svg")
+  '(("Text and tspan" "https://www.w3.org/TR/2018/CR-SVG2-20181004/images/text/tspan01.svg")
+    ("Text rotation 1" "https://www.w3.org/TR/2018/CR-SVG2-20181004/images/text/tspan04.svg")
+    ("Text rotation 2" "https://www.w3.org/TR/2018/CR-SVG2-20181004/images/text/tspan05.svg")
+    ("Path quadratic bezier" "https://www.w3.org/TR/2018/CR-SVG2-20181004/images/paths/quad01.svg")
     ("Path arc" "https://www.w3.org/TR/2018/CR-SVG2-20181004/images/paths/arcs01.svg")
     ("Retangle and transform" "https://www.w3.org/TR/2018/CR-SVG2-20181004/images/shapes/rect02.svg")
     ("Ellipse and transform" "https://www.w3.org/TR/2018/CR-SVG2-20181004/images/shapes/ellipse01.svg")
@@ -1868,7 +2096,8 @@ using ZPNG:WRITE-PNG."
                                          :data (flexi-streams:with-output-to-sequence (out)
                                                  (draw-svg-from-string
                                                   (dex:get (slot-value (capi:element-interface pane) 'url) :force-string t)
-                                                  out))))
+                                                  out
+                                                  :viewport-width 500 :viewport-height 500))))
                          0 0)))
    (buttons
     capi:push-button-panel

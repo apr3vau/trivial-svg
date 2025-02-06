@@ -110,6 +110,8 @@ The plugin has not fully covered the SVG specification yet. It may misbehave whe
   - rect
   - stop
   - svg
+  - *text*
+  - *tspan*
   - use
 - presentation attributes
   - color
@@ -129,9 +131,14 @@ The plugin has not fully covered the SVG specification yet. It may misbehave whe
 
 Here's what we're planning to do now:
 
-- [ ] [BUG] Fix the wrong interpretation of rotational transform matrix
+- [x] [BUG] Fix the wrong interpretation of rotational transform matrix
 - [x] Support specifying attributes with inline `style` attribute and CSS `style` element
 - [ ] Support `text` and `tspan`
+  - [x] `x`, `y`, `dx`, `dy`, `rotate`
+  - [ ] Get font with different weight/slant with `zpb-ttf` on all platforms
+  - [ ] SVG2 Content area & SVG tiny `textArea`
+  - [ ] ...
+
 - [ ] Support `image`, `marker` and `symbol` (and maybe `a`?)
 - [ ] Support gradients `spreadMethod` and `pattern`
 - [ ] Support clipping and masking
