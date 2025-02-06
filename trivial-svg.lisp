@@ -170,26 +170,28 @@
 
 ;; GRAPHICS-PORTS:PREMULTIPLY-TRANSFORMS
 (defun premultiply-transforms (transform1 transform2)
-  (with-nth (a b c d e f) transform2
-    (with-nth (a* b* c* d* e* f*) transform1
-      (setf a* (+ (* a a*) (* b c*))
-            b* (+ (* a b*) (* b d*))
-            c* (+ (* c a*) (* d c*))
-            d* (+ (* c b*) (* d d*))
-            e* (+ (* e a*) (* f c*) e*)
-            f* (+ (* e b*) (* f d*) f*))))
+  (destructuring-bind (a b c d e f) transform2
+    (destructuring-bind (a* b* c* d* e* f*) transform1
+      (with-nth (a1 b1 c1 d1 e1 f1) transform1
+        (setf a1 (+ (* a a*) (* b c*))
+              b1 (+ (* a b*) (* b d*))
+              c1 (+ (* c a*) (* d c*))
+              d1 (+ (* c b*) (* d d*))
+              e1 (+ (* e a*) (* f c*) e*)
+              f1 (+ (* e b*) (* f d*) f*)))))
   transform1)
 
 ;; GRAPHICS-PORTS:POSTMULTIPLY-TRANSFORMS
 (defun postmultiply-transforms (transform1 transform2)
-  (with-nth (a b c d e f) transform1
-    (with-nth (a* b* c* d* e* f*) transform2
-      (setf a (+ (* a a*) (* b c*))
-            b (+ (* a b*) (* b d*))
-            c (+ (* c a*) (* d c*))
-            d (+ (* c b*) (* d d*))
-            e (+ (* e a*) (* f c*) e*)
-            f (+ (* e b*) (* f d*) f*))))
+  (destructuring-bind (a b c d e f) transform1
+    (destructuring-bind (a* b* c* d* e* f*) transform2
+      (with-nth (a1 b1 c1 d1 e1 f1) transform1
+        (setf a1 (+ (* a a*) (* b c*))
+              b1 (+ (* a b*) (* b d*))
+              c1 (+ (* c a*) (* d c*))
+              d1 (+ (* c b*) (* d d*))
+              e1 (+ (* e a*) (* f c*) e*)
+              f1 (+ (* e b*) (* f d*) f*)))))
   transform1)
 
 ;; GRAPHICS-PORTS:APPLY-SCALE, GRAPHICS-PORTS:APPLY-TRANSLATION,
@@ -1378,6 +1380,15 @@ element."
                     (gethash "width" container-attributes)
                     (gethash "height" container-attributes)))
                  val))
+             (parse-opacity (val)
+               (if (stringp val) (clamp (parse-float val) 0.0 1.0) (if val 1.0 nil)))
+             (with-alpha (color alpha)
+               (when color
+                 (setq color (ensure-rgb color))
+                 (make-rgb (color-red color)
+                           (color-green color)
+                           (color-blue color)
+                           (* (color-alpha color) alpha))))
              (get-attr (key &optional default)
                (declare (inline get-attr))
                (gethash key new-attrs
@@ -1385,17 +1396,25 @@ element."
                                  default)))
              (get-fill ()
                (declare (inline get-fill))
-               (when-let (val (get-attr "fill"))
-                 (string-case (val)
+               (when-let (fill (get-attr "fill"))
+                 (string-case (fill)
                    ("context-fill"
-                    (setq val (gethash "fill" container-attributes)))
+                    (setq fill (gethash "fill" container-attributes)))
                    ("context-stroke"
-                    (setq val (gethash "stroke" container-attributes)))
+                    (setq fill (gethash "stroke" container-attributes)))
                    (t nil))
-                 (cond ((member val '(nil "auto") :test #'equalp) :black)
-                       ((string-equal val "none") nil)
-                       ((search "url" val) (css-parse-url val root-node))
-                       (t (css-parse-color val)))))
+                 (setq fill
+                       (cond ((member fill '(nil "auto") :test #'equalp) (make-rgb 0.0 0.0 0.0 1.0))
+                             ((string-equal fill "none") nil)
+                             ((search "url" fill) (css-parse-url fill root-node))
+                             (t (css-parse-color fill))))
+                 (when-let (op (or (parse-opacity (gethash "fill-opacity" container-attributes))
+                                   (parse-opacity (gethash "opacity" container-attributes))))
+                   (setq fill (with-alpha fill op)))
+                 (when-let (op (or (parse-opacity (gethash "fill-opacity" new-attrs))
+                                   (parse-opacity (gethash "opacity" new-attrs))))
+                   (setq fill (with-alpha fill op)))
+                 fill))
              (get-fill-rule ()
                (declare (inline get-fill-rule))
                (if-let (val (get-attr "fill-rule"))
@@ -1405,16 +1424,24 @@ element."
                  :winding))
              (get-stroke ()
                (declare (inline get-stroke))
-               (when-let (val (get-attr "stroke"))
-                 (string-case (val)
+               (when-let (stroke (get-attr "stroke"))
+                 (string-case (stroke)
                    ("context-fill"
-                    (setq val (gethash "fill" container-attributes)))
+                    (setq stroke (gethash "fill" container-attributes)))
                    ("context-stroke"
-                    (setq val (gethash "stroke" container-attributes)))
+                    (setq stroke (gethash "stroke" container-attributes)))
                    (t nil))
-                 (cond ((member val '(nil "auto" "none") :test #'equalp) nil)
-                       ((search "url" val) (css-parse-url val root-node))
-                       (t (css-parse-color val)))))
+                 (setq stroke
+                       (cond ((member stroke '(nil "auto" "none") :test #'equalp) nil)
+                             ((search "url" stroke) (css-parse-url stroke root-node))
+                             (t (css-parse-color stroke))))
+                 (when-let (op (or (parse-opacity (gethash "stroke-opacity" container-attributes))
+                                   (parse-opacity (gethash "opacity" container-attributes))))
+                   (setq stroke (with-alpha stroke op)))
+                 (when-let (op (or (parse-opacity (gethash "stroke-opacity" new-attrs))
+                                   (parse-opacity (gethash "opacity" new-attrs))))
+                   (setq stroke (with-alpha stroke op)))
+                 stroke))
              (get-stroke-dasharray ()
                (declare (inline get-stroke-dasharray))
                (when-let (val (get-attr "stroke-dasharray"))
@@ -1438,19 +1465,12 @@ element."
                (svg-parse-length
                 (get-attr name)
                 (if (or (find #\y name) (search "height" name)) :height :width)))
-             (run-draw-path (trans-origin-x trans-origin-y path)
-               (declare (type double-float trans-origin-x trans-origin-y))
-               (let* ((transform (make-transform))
-                      (svg-transform (gethash "svg-transform" container-attributes))
-                      (container-transforms (gethash "container-transforms" container-attributes))
-                      (self-transforms (gethash "transform" new-attrs))
-                      (fill (get-fill))
-                      (stroke (get-stroke))
-                      (stroke-width (or (get-a-length "stroke-width") 1))
-                      (linecap (get-linecap))
-                      (linejoin (get-linejoin))
-                      (dash (get-stroke-dasharray))
-                      (fill-rule (get-fill-rule)))
+             (multiply-transforms-for-drawing (trans-origin-x trans-origin-y)
+               (let ((transform (make-transform))
+                     (svg-transform (gethash "svg-transform" container-attributes))
+                     (container-transforms (gethash "container-transforms" container-attributes))
+                     (self-transforms (gethash "transform" new-attrs)))
+                 ;(print (list svg-transform container-transforms self-transforms node))
                  ;; These transforms has not been parsed, so parse them first
                  (rectangle-bind (x y w h)
                      (gethash "viewBox" container-attributes)
@@ -1473,33 +1493,20 @@ element."
                  (apply-translation transform trans-origin-x trans-origin-y)
                  ;; Apply svg-transform in the end. It's relative with (0, 0);
                  (when svg-transform (postmultiply-transforms transform svg-transform))
-                 ;; Convert to Vecto's vector matrix
-                 (setq transform (coerce transform 'vector))
+                 transform))
+             (run-draw-path (trans-origin-x trans-origin-y path)
+               (declare (type double-float trans-origin-x trans-origin-y))
+               (let* ((transform (coerce (multiply-transforms-for-drawing trans-origin-x trans-origin-y) 'vector))
+                      (fill (get-fill))
+                      (stroke (get-stroke))
+                      (stroke-width (or (get-a-length "stroke-width") 1))
+                      (linecap (get-linecap))
+                      (linejoin (get-linejoin))
+                      (dash (get-stroke-dasharray))
+                      (fill-rule (get-fill-rule)))
+                 ;; Deal with gradients
                  (when (plump-dom:node-p stroke)
                    (setq stroke :black))
-                 ;; Opacity
-                 (flet ((parse-opacity (val)
-                          (if (stringp val) (clamp (parse-float val) 0.0 1.0) (if val 1.0 nil)))
-                        (with-alpha (color alpha)
-                          (when color
-                            (setq color (ensure-rgb color))
-                            (make-rgb (color-red color)
-                                      (color-green color)
-                                      (color-blue color)
-                                      (* (color-alpha color) alpha)))))
-                   (when-let (op (or (parse-opacity (gethash "fill-opacity" container-attributes))
-                                     (parse-opacity (gethash "opacity" container-attributes))))
-                     (setq fill (with-alpha fill op)))
-                   (when-let (op (or (parse-opacity (gethash "fill-opacity" new-attrs))
-                                     (parse-opacity (gethash "opacity" new-attrs))))
-                     (setq fill (with-alpha fill op)))
-                   (when-let (op (or (parse-opacity (gethash "stroke-opacity" container-attributes))
-                                     (parse-opacity (gethash "opacity" container-attributes))))
-                     (setq stroke (with-alpha stroke op)))
-                   (when-let (op (or (parse-opacity (gethash "stroke-opacity" new-attrs))
-                                     (parse-opacity (gethash "opacity" new-attrs))))
-                     (setq stroke (with-alpha stroke op))))
-                 ;; Deal with gradients
                  (if (plump-dom:node-p fill)
                    (let ((grad-trans (gethash "gradientTransform" (plump-dom:attributes fill))))
                      ;; Parse gradient transforms
@@ -1761,10 +1768,12 @@ element."
                                         (copy-transform val)
                                       (make-transform)))
                          (child (plump-dom:get-element-by-id root-node id))
+                         (child-tag (plump-dom:tag-name child))
                          ; Make a shadow tree
                          (shadow-child (make-instance 'plump:element
                                                       :parent node
-                                                      :tag-name "g"
+                                                      :tag-name (if (member child-tag '("def" "marker" "symbol"))
+                                                                  "g" child-tag)
                                                       :children (plump:make-child-array)
                                                       :attributes (plump:attributes node))))
                     (declare (type double-float new-x new-y))
