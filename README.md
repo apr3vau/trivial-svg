@@ -135,7 +135,7 @@ Here's what we're planning to do now:
 - [x] Support specifying attributes with inline `style` attribute and CSS `style` element
 - [ ] Support `text` and `tspan`
   - [x] `x`, `y`, `dx`, `dy`, `rotate`
-  - [ ] Get font with different weight/slant with `zpb-ttf` on all platforms
+  - [x] Get font with different weight/slant with `zpb-ttf` on all platforms
   - [ ] SVG2 Content area & SVG tiny `textArea`
   - [ ] ...
 

@@ -18,12 +18,12 @@
   (:import-from #:serapeum #:push-end #:parse-float #:defalias)
   (:import-from #:uiop #:string-prefix-p)
   (:export
-   rad-to-deg deg-to-rad hex-to-spec get-font-file
+   rad-to-deg deg-to-rad hex-to-spec
+   get-char-width get-char-height font-family font-subfamily find-font-loader get-font-file
    css-parse-url css-parse-angel css-parse-color css-parse-length
    css-parse-a-number css-parse-transforms css-parse-numeric-color css-parse-all-angels-from-string
    css-parse-all-length-from-string css-parse-all-numbers-from-string
-   create-renderer draw-svg-from-string)
-  )
+   create-renderer draw-svg-from-string))
 
 (in-package trivial-svg)
 
@@ -245,13 +245,98 @@ From serapeum's `merge-tables!`"
          (glyph (zpb-ttf:find-glyph char loader)))
     (* (zpb-ttf:advance-height glyph) scale)))
 
-;; A small utility to find font file within system-installed fonts,
-;; using font family name. Require fc-list on Linux.
+(defun font-family (font-loader)
+  (loop for entry across (zpb-ttf::name-entries font-loader)
+        when (= (zpb-ttf::name-id entry) 1) ; 1 = (zpb-ttf::name-identifier-id :font-family)
+          return (zpb-ttf:value entry)))
+
+(defun font-subfamily (font-loader)
+  (loop for entry across (zpb-ttf::name-entries font-loader)
+        when (= (zpb-ttf::name-id entry) 2) ; 2 = (zpb-ttf::name-identifier-id :font-subfamily)
+          return (zpb-ttf:value entry)))
+
+(defun font-subfamily-match-p (font-loader weight slant)
+  ;; FIXME: not perfect. e.g. semibold?
+  (let ((sub (font-subfamily font-loader)))
+    (cond ((and (or (null weight) (string-equal weight "regular"))
+                (or (null slant) (string-equal slant "roman")))
+           (string-equal sub "regular"))
+          ((or (null weight) (string-equal weight "regular"))
+           (string-equal slant sub))
+          ((or (null slant) (string-equal slant "roman"))
+           (string-equal weight sub))
+          (t (and (search weight sub :test #'char-equal)
+                  (search slant sub :test #'char-equal))))))
+
+;; A small utility to find font file within system-installed fonts.
+;; Require fc-list on Linux.
 
 (defvar *default-font-family*
   #+mswindows "C:/Windows/Fonts/Arial.ttf"
   #+darwin "/System/Library/Fonts/HelveticaNeue.ttc"
   #+(and unix (not darwin)) "Liberation Sans")
+
+(defun find-font-loader (family-or-file weight slant)
+  (let* (result fallback)
+    #+(or mswindows darwin)
+    (dolist (file (if (pathnamep family-or-file) (list family-or-file)
+                    (directory
+                     (make-pathname :name :wild :type :wild :defaults
+                                    #+mswindows #P"C:/Windows/Fonts/"
+                                    #+darwin #P"/System/Library/Fonts/**/"))))
+      (when (member (pathname-type file) '("ttf" "ttc" "otf" "otc") :test #'string-equal)
+        (handler-case
+            (let ((loader (zpb-ttf:open-font-loader file)))
+              (if (string-equal (font-family loader) family-or-file)
+                (if (font-subfamily-match-p loader weight slant)
+                  (progn (setq result loader)
+                    (return))
+                  (let ((count (zpb-ttf:collection-font-count loader)))
+                    (if fallback
+                      (zpb-ttf:close-font-loader loader)
+                      (setq fallback loader))
+                    (when (> count 1)
+                      (loop named t
+                            for index from 1 to count
+                            for loader = (zpb-ttf:open-font-loader file :collection-index index)
+                            when (font-subfamily-match-p loader weight slant)
+                              do (setq result loader)
+                                 (return)))))
+                (zpb-ttf:close-font-loader loader)))
+          (zpb-ttf::regrettable-hex-value (e) nil)
+          (error (e) nil))))
+    #-(or mswindows darwin)
+    (dolist (line (split-sequence #\Newline
+                                  (with-output-to-string (*standard-output*)
+                                    (uiop:run-program "fc-list" :output t))
+                                  :remove-empty-subseqs t))
+      ;; We don't use `style` field from fc-list output here,
+      ;; as we need an exact index of the font from collection.
+      (destructuring-bind (file family &rest style) (split-sequence #\: line)
+        (declare (ignore style))
+        (when (string-equal (string-trim-whitespace family) family-or-file)
+          (handler-case
+              (let ((loader (zpb-ttf:open-font-loader file)))
+                (if (font-subfamily-match-p loader weight slant)
+                  (progn (setq result loader)
+                    (return))
+                  (let ((count (zpb-ttf:collection-font-count loader)))
+                    (if fallback
+                      (zpb-ttf:close-font-loader loader)
+                      (setq fallback loader))
+                    (when (> count 1)
+                      (loop named t
+                            for index from 1 to count
+                            for loader = (zpb-ttf:open-font-loader file :collection-index index)
+                            when (font-subfamily-match-p loader weight slant)
+                              do (setq result loader)
+                                 (return))))))
+            (zpb-ttf::regrettable-hex-value (e) nil)
+            (error (e) nil)))))
+    (if result
+      (progn (when fallback (zpb-ttf:close-font-loader fallback))
+        result)
+      fallback)))
 
 (defun get-font-file (&optional family-or-file)
   (if family-or-file 
@@ -280,31 +365,6 @@ From serapeum's `merge-tables!`"
             (find family-or-file fc-list :test #'search)
             (find *default-font-description* fc-list :test #'search)
             (error "Cannot find available font. Please give a pathname to :FAMILY"))))
-    *default-font-family*))
-
-(defun find-matching-font (family-or-file)
-  (if family-or-file 
-    (when (or (not (or (pathname-directory family-or-file)
-                       (pathname-type family-or-file)))
-              (not (probe-file family-or-file)))
-      #+mswindows
-      (find-if (lambda (file)
-                 (member (pathname-type file) '("ttf" "ttc" "otf" "otc")
-                         :test #'string=))
-               (directory (make-pathname :name family-or-file :type :wild :defaults #P"C:/Windows/Fonts/")))
-      #+darwin
-      (find-if (lambda (file)
-                 (member (pathname-type file) '("ttf" "ttc" "otf" "otc")
-                         :test #'string=))
-               (directory (make-pathname :name family-or-file :type :wild :defaults #P"/System/Library/Fonts/**/")))
-      #+(and unix (not darwin))
-      (let ((fc-list (mapcar (lambda (str) (first (split-sequence #\: str)))
-                             (split-sequence
-                              #\Newline 
-                              (with-output-to-string (*standard-output*)
-                                (uiop:run-program "fc-list" :output t))))))
-        (or (find (string-append "/" family-or-file ".") fc-list :test #'search)
-            (find family-or-file fc-list :test #'search))))
     *default-font-family*))
 
 
@@ -414,24 +474,24 @@ based on current graphics port, CSS viewport and element's parent."
                ("em"   size)
                ("rem"  size)
                ("ex"   (let ((bbox (vecto:string-bounding-box "x" size font)))
-                         (+ (zpb-ttf:ymin bbox) (zpb-ttf:ymax bbox))))
+                         (- (zpb-ttf:ymax bbox) (zpb-ttf:ymin bbox))))
                ("rex"  (let ((bbox (vecto:string-bounding-box "x" size font)))
-                         (+ (zpb-ttf:ymin bbox) (zpb-ttf:ymax bbox))))
+                         (- (zpb-ttf:ymax bbox) (zpb-ttf:ymin bbox))))
                ("cap"  (let ((bbox (vecto:string-bounding-box "O" size font)))
-                         (+ (zpb-ttf:ymin bbox) (zpb-ttf:ymax bbox))))
+                         (- (zpb-ttf:ymax bbox) (zpb-ttf:ymin bbox))))
                ("ch"   (let ((bbox (vecto:string-bounding-box "0" size font)))
-                         (+ (zpb-ttf:xmin bbox) (zpb-ttf:xmax bbox))))
+                         (- (zpb-ttf:xmax bbox) (zpb-ttf:xmin bbox))))
                ("rch"  (let ((bbox (vecto:string-bounding-box "0" size font)))
-                         (+ (zpb-ttf:xmin bbox) (zpb-ttf:xmax bbox))))
+                         (- (zpb-ttf:xmax bbox) (zpb-ttf:xmin bbox))))
                ("ic"   (let ((bbox (vecto:string-bounding-box "　" size font)))
-                         (+ (zpb-ttf:xmin bbox) (zpb-ttf:xmax bbox))))
+                         (- (zpb-ttf:xmax bbox) (zpb-ttf:xmin bbox))))
                ("ric"  (let ((bbox (vecto:string-bounding-box "　" size font)))
-                         (+ (zpb-ttf:xmin bbox) (zpb-ttf:xmax bbox))))
+                         (- (zpb-ttf:xmax bbox) (zpb-ttf:xmin bbox))))
                ;; FIXME: not precise value
                ("lh"   (let ((bbox (vecto:string-bounding-box "M" size font)))
-                         (+ (zpb-ttf:ymin bbox) (zpb-ttf:ymax bbox))))
+                         (- (zpb-ttf:ymax bbox) (zpb-ttf:ymin bbox))))
                ("rlh"  (let ((bbox (vecto:string-bounding-box "M" size font)))
-                         (+ (zpb-ttf:ymin bbox) (zpb-ttf:ymax bbox))))
+                         (- (zpb-ttf:ymax bbox) (zpb-ttf:ymin bbox))))
                  
                ("vw"   (/ viewport-w 100d0))
                ("vi"   (/ viewport-w 100d0))
@@ -1506,33 +1566,55 @@ element."
                 (if (or (find #\y name) (search "height" name)) :height :width)))
              (get-font ()
                (let* ((family (get-attr "font-family"))
+                      (weight (when-let (weight (get-attr "font-weight"))
+                                (if (digit-char-p (char weight 0))
+                                  (let ((num (parse-integer weight)))
+                                    (cond ((< num 400) "light")
+                                          ((< num 500) "regular")
+                                          ((< num 700) "semibold")
+                                          ((< num 800) "bold")
+                                          (t "black")))
+                                  (if (string-equal weight "normal") "regular"
+                                    weight))))
+                      (slant (when-let (style (get-attr "font-style"))
+                               (string-case (style :default nil)
+                                 ("italic" "italic")
+                                 ("oblique" "oblique"))))
                       (size (if-let (size (get-attr "font-size"))
                                 (round (svg-parse-length size :width))
                               (vecto::size (vecto::font state))))
                       (loader (vecto::loader (vecto::font state))))
-                 (when family
+                 (if family
                    (let ((subs (split-sequence-if (lambda (c) (member c '(#\, #\Space #\"))) family
                                                   :remove-empty-subseqs t)))
                      (dolist (sub subs)
-                       (string-case (sub)
+                       (string-case (sub :default nil)
                          ("serif"
-                          #+(or mswindows darwin) (setq family "Times New Roman")
-                          #-(or mswindows darwin) (setq family "Liberation Serif")
-                          (return))
+                          #+(or mswindows darwin) (setq sub "Times New Roman")
+                          #-(or mswindows darwin) (setq sub "Liberation Serif"))
                          ("sans-serif"
-                          #+mswindows (setq family "Arial")
-                          #+darwin (setq family ".AppleSystemUIFont")
-                          #-(or mswindows darwin) (setq family"Liberation Sans")
-                          (return))
+                          #+mswindows (setq sub "Arial")
+                          #+darwin (setq sub "Helvetica Neue")
+                          #-(or mswindows darwin) (setq sub "Liberation Sans"))
                          ("monospace"
-                          #+(or mswindows darwin) (setq family "Courier New")
-                          #-(or mswindows darwin) (setq family "Liberation Mono")
-                          (return))
-                         (t (when-let (file (find-matching-font sub))
-                              (setq family file)
-                              (return)))))
-                     (when (or (stringp family) (pathnamep family))
-                       (setq loader (vecto::%get-font state (get-font-file family))))))
+                          #+(or mswindows darwin) (setq sub "Courier New")
+                          #-(or mswindows darwin) (setq sub "Liberation Mono")))
+                       (if-let (cache (gethash (list sub weight slant) (vecto::font-loaders state)))
+                           (progn (setq loader cache)
+                             (return))
+                         (when-let (found (find-font-loader sub weight slant))
+                           (find-font-loader sub weight slant)
+                           (setq loader found)
+                           (setf (gethash (list sub weight slant) (vecto::font-loaders state)) found)
+                           (return)))))
+                   (when (or weight slant)
+                     (setq family (font-family loader))
+                     (if-let (cache (gethash (list family weight slant) (vecto::font-loaders state)))
+                         (setq loader cache)
+                       (when-let (found (find-font-loader family weight slant))
+                         (setq loader found)
+                         (setf (gethash (list family weight slant) (vecto::font-loaders state)) found)))))
+                 (print (list family weight slant size (font-family loader) (font-subfamily loader)))
                  (values loader size)))
              (multiply-transforms-for-drawing (trans-origin-x trans-origin-y)
                (let ((transform (make-transform))
@@ -2067,8 +2149,8 @@ using ZPNG:WRITE-PNG."
 
 ;; Here's the interactive test adapted from LW-SVG.
 ;; Can only running with LispWorks Macintosh.
-;; It requires DEXADOR package:
-;; (ql:quickload :dexador)
+;; It requires DEXADOR and FLEXI-STREAMS package:
+;; (ql:quickload '(dexador flexi-streams))
 
 #+nil
 (capi:define-interface interactive-test-interface ()
