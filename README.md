@@ -162,7 +162,7 @@ There's also a partial CSS parser inside the code. Take them if they're useful f
 
 ## Acknowledgements
 
-Thanks to Zachary P. Beane, as the Trivial-SVG depends on his library, his library, and his library. What a great work!
+Thanks to Zachary P. Beane, and other contributors of `vecto`, `cl-vectors`, `zpb-ttf` and other libraries. Your endeavor for the infrastructure is the basis of this project.
 
 Thanks my sister Simone, and my headmate May, who help and support me.
 

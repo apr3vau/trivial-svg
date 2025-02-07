@@ -1614,14 +1614,12 @@ element."
                        (when-let (found (find-font-loader family weight slant))
                          (setq loader found)
                          (setf (gethash (list family weight slant) (vecto::font-loaders state)) found)))))
-                 (print (list family weight slant size (font-family loader) (font-subfamily loader)))
                  (values loader size)))
              (multiply-transforms-for-drawing (trans-origin-x trans-origin-y)
                (let ((transform (make-transform))
                      (svg-transform (gethash "svg-transform" container-attributes))
                      (container-transforms (gethash "container-transforms" container-attributes))
                      (self-transforms (gethash "transform" new-attrs)))
-                 ;(print (list svg-transform container-transforms self-transforms node))
                  ;; These transforms has not been parsed, so parse them first
                  (rectangle-bind (x y w h)
                      (gethash "viewBox" container-attributes)
@@ -1811,15 +1809,19 @@ element."
         ("path" (run-draw-path
                  0d0 0d0
                  (convert-path-commands (svg-parse-path-data (gethash "d" new-attrs)))))
-        ("rect" (let ((x (get-a-length "x"))
-                      (y (get-a-length "y"))
-                      (w (get-a-length "width"))
-                      (h (get-a-length "height"))
+        ("rect" (let ((x (or (get-a-length "x") 0d0))
+                      (y (or (get-a-length "y") 0d0))
+                      (w (or (get-a-length "width") (svg-parse-length "100%" :width)))
+                      (h (or (get-a-length "height") (svg-parse-length "100%" :height)))
                       (rx (get-a-length "rx"))
                       (ry (get-a-length "ry")))
                   (declare (type double-float x y w h))
-                  (cond ((and rx (null ry)) (setq ry (min (/ h 2d0) (* (/ rx w) h))))
-                        ((and (null rx) ry) (setq rx (min (/ w 2d0) (* (/ ry h) w)))))
+                  (cond ((and rx (or (null ry) (equal ry "auto")))
+                         (setq rx (svg-parse-length rx :width)
+                               ry (min (/ h 2d0) (* (/ rx w) h))))
+                        ((and ry (or (null rx) (equal rx "auto")))
+                         (setq ry (svg-parse-length ry :height)
+                               rx (min (/ w 2d0) (* (/ ry h) w)))))
                   (run-draw-path
                    x y
                    (if (or (null rx) (and (= rx 0d0) (= ry 0d0)))
@@ -1829,15 +1831,26 @@ element."
                        (:line ,(+ x rx) ,(+ y h)) (:arc ,(+ x rx) ,(- (+ y h) ry) ,rx ,ry 0 ,pi-by-2 ,pi)
                        (:line ,x ,(+ y ry)) (:arc ,(+ x rx) ,(+ y ry) ,rx ,ry 0 ,pi ,(+ pi pi-by-2))
                        (:close))))))
-        ("circle" (let ((cx (get-a-length "cx"))
-                        (cy (get-a-length "cy"))
-                        (r (get-a-length "r")))
+        ("circle" (let ((cx (or (get-a-length "cx") 0d0))
+                        (cy (or (get-a-length "cy") 0d0))
+                        (r (or (get-a-length "r") 0d0)))
                     (declare (type double-float cx cy r))
-                    (run-draw-path cx cy (list (list :arc cx cy r r 0 0 2pi)))))
-        ("ellipse" (let ((cx (get-a-length "cx")) (cy (get-a-length "cy"))
-                         (rx (get-a-length "rx")) (ry (get-a-length "ry")))
-                     (declare (type double-float cx cy rx ry))
-                     (run-draw-path cx cy (list (list :arc cx cy rx ry 0 0 2pi)))))
+                    (run-draw-path cx cy (list (list :arc cx cy r r 0d0 0d0 2pi)))))
+        ("ellipse" (let ((cx (or (get-a-length "cx") 0d0))
+                         (cy (or (get-a-length "cy") 0d0))
+                         (rx (get-attr "rx"))
+                         (ry (get-attr "ry")))
+                     (declare (type double-float cx cy))
+                     (cond ((and rx (or (null ry) (equal ry "auto")))
+                            (setq rx (svg-parse-length rx :width)
+                                  ry rx))
+                           ((and ry (or (null rx) (equal rx "auto")))
+                            (setq ry (svg-parse-length ry :height)
+                                  rx ry))
+                           ((null rx) (setq rx 0d0 ry 0d0))
+                           (t (setq rx (svg-parse-length rx :width)
+                                    ry (svg-parse-length ry :height))))
+                     (run-draw-path cx cy (list (list :arc cx cy rx ry 0d0 0d0 2pi)))))
         ("line" (let ((x1 (get-a-length "x1")) (y1 (get-a-length "y1"))
                       (x2 (get-a-length "x2")) (y2 (get-a-length "y2")))
                   (declare (type double-float x1 y1 x2 y2))
@@ -2149,7 +2162,7 @@ using ZPNG:WRITE-PNG."
 
 ;; Here's the interactive test adapted from LW-SVG.
 ;; Can only running with LispWorks Macintosh.
-;; It requires DEXADOR and FLEXI-STREAMS package:
+;; It requires DEXADOR and FLEXI-STREAMS packages:
 ;; (ql:quickload '(dexador flexi-streams))
 
 #+nil
@@ -2222,6 +2235,16 @@ using ZPNG:WRITE-PNG."
    :title (format nil "1/~A ~A" (1+ (length *interactive-tests*)) (first (first *interactive-tests*)))))
 
 ;(capi:display (make-instance 'interactive-test-interface))
+
+;; Following code can be used to draw the examples in interactive
+;; test, save them into file for checking.
+#+nil
+(progn
+  (ql:quickload :dexador)
+  (loop for i from 0
+        for (nil url) in *interactive-tests*
+        do (draw-svg-from-string (funcall (intern "GET" "DEX") url :force-string t) (format nil "~~/svg-test/~A.png" i)
+                                 :viewport-width 500 :viewport-height 500)))
 
 #|
 (ql:quickload :trivial-svg)
