@@ -16,7 +16,6 @@
   (:use #:cl #:string-case #:split-sequence)
   (:import-from #:alexandria #:clamp #:copy-hash-table #:lerp #:ensure-gethash #:with-unique-names #:when-let #:if-let)
   (:import-from #:serapeum #:push-end #:parse-float #:defalias)
-  (:import-from #:uiop #:string-prefix-p)
   (:export
    rad-to-deg deg-to-rad hex-to-spec
    get-char-width get-char-height font-family font-subfamily find-font-loader get-font-file
@@ -51,6 +50,10 @@
                   for var in bindings
                   collect `(,var (nth ,i ,lst)))
          ,@body))))
+
+;; serapeum's version has mysterous inline-expand warning on LispWorks, annoying...
+(defun string-prefix-p (prefix string)
+  (string-equal prefix string :end2 (length prefix)))
 
 ;; Why I'm prefer using CL's convention `NFOO` but not Scheme's `FOO!` XD...
 (defun nmerge-tables (table &rest tables)

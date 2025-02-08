@@ -17,7 +17,6 @@ We provide a single ASDF system `trivial-svg` defined in a single file [trivial-
 - plump
 - serapeum
 - vecto
-- uiop
 
 > 3/2/2025: Note that currently the Quicklisp distribution of `zpb-ttf` library (the necessary dependency of `vecto`) is staled. You should install the library manually with a version that at least later than [this commit](https://github.com/xach/zpb-ttf/commit/3b907c6f666cd3ed56ff2d469f23c5e26a709f2b). For example:
 >
@@ -27,7 +26,9 @@ We provide a single ASDF system `trivial-svg` defined in a single file [trivial-
 
 ## Usage
 
-## Simple interface: `draw-svg-from-string`
+To load the source code, you can clone this library to `~/common-lisp/` or `~/quicklisp/local-projects/`, then evaluate `(ql:quickload :trivial-svg)` if you have Quicklisp installed.
+
+### Simple interface: `draw-svg-from-string`
 
 ``` common-lisp
 (defparameter *test-svg-string*
@@ -47,7 +48,7 @@ Draw the first SVG element inside *svg-string*. If *svg-string* is a pathname, r
 
 The output PNG image will be resized to fit the size of SVG. *viewport-width* and *viewport-height* specify the initial width and height of the drawing area, which will only be used for resolving relative CSS length units in the outermost SVG element.
 
-## Custom Drawing with Vecto
+### Custom Drawing with Vecto
 
 Trivial-SVG use the `graphics-state` of Vecto,  which means it can cooperate with any Vecto drawing actions.
 
@@ -118,6 +119,10 @@ The plugin has not fully covered the SVG specification yet. It may misbehave whe
   - fill
   - fill-opacity
   - fill-rule
+  - font-family
+  - font-size
+  - font-weight
+  - font-style
   - opacity
   - stop-color
   - stop-opacity
@@ -128,6 +133,7 @@ The plugin has not fully covered the SVG specification yet. It may misbehave whe
   - stroke-opacity
   - stroke-width
   - transform
+  - _writing-mode_
 
 Here's what we're planning to do now:
 
@@ -136,9 +142,11 @@ Here's what we're planning to do now:
 - [ ] Support `text` and `tspan`
   - [x] `x`, `y`, `dx`, `dy`, `rotate`
   - [x] Get font with different weight/slant with `zpb-ttf` on all platforms
+    - [ ] perhaps we can optimize its speed...
+  - [ ] Character and word spacing
   - [ ] SVG2 Content area & SVG tiny `textArea`
   - [ ] ...
-
+  
 - [ ] Support `image`, `marker` and `symbol` (and maybe `a`?)
 - [ ] Support gradients `spreadMethod` and `pattern`
 - [ ] Support clipping and masking
