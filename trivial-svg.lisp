@@ -69,6 +69,9 @@ From serapeum's `merge-tables!`"
 ;; HARLEQUIN-COMMON-LISP:STRING-TRIM-WHITESPACE
 (defalias string-trim-whitespace #'serapeum:trim-whitespace)
 
+;; LISPWORKS:WHITESPACE-CHAR-P
+(defalias whitespace-char-p #'serapeum:whitespacep)
+
 ;; LISPWORKS:STRING-APPEND
 (defalias string-append #'serapeum:string+)
 
@@ -161,27 +164,6 @@ From serapeum's `merge-tables!`"
 
 ;; Inspired by VECTO
 
-(defun mult (m1 m2)
-  (declare (inline mult))
-  (destructuring-bind (a b c d e f)
-      m1
-    (destructuring-bind (a* b* c* d* e* f*)
-        m2
-      (make-transform (+ (* a a*)
-                         (* b c*))
-                      (+ (* a b*)
-                         (* b d*))
-                      (+ (* c a*)
-                         (* d c*))
-                      (+ (* c b*)
-                         (* d d*))
-                      (+ (* e a*)
-                         (* f c*)
-                         e*)
-                      (+ (* e b*)
-                         (* f d*)
-                         f*)))))
-
 ;; GRAPHICS-PORTS:PREMULTIPLY-TRANSFORMS
 (defun premultiply-transforms (transform1 transform2)
   (destructuring-bind (a b c d e f) transform2
@@ -234,7 +216,6 @@ From serapeum's `merge-tables!`"
 
 ;; Fonts
 
-;; GP:GET-CHAR-WIDTH, GP:GET-FONT-HEIGHT, similar function using vecto & zpb-ttf
 (defun get-char-width (char loader size)
   (let* ((scale (vecto::loader-font-scale size loader))
          (glyph (zpb-ttf:find-glyph char loader)))
@@ -244,6 +225,16 @@ From serapeum's `merge-tables!`"
   (let* ((scale (vecto::loader-font-scale size loader))
          (glyph (zpb-ttf:find-glyph char loader)))
     (* (zpb-ttf:advance-height glyph) scale)))
+
+(defun get-glyph-width (char loader size)
+  (let* ((scale (vecto::loader-font-scale size loader))
+         (glyph (zpb-ttf:find-glyph char loader)))
+    (* (- (zpb-ttf:xmax glyph) (zpb-ttf:xmin glyph)) scale)))
+
+(defun get-glyph-height (char loader size)
+  (let* ((scale (vecto::loader-font-scale size loader))
+         (glyph (zpb-ttf:find-glyph char loader)))
+    (* (- (zpb-ttf:ymax glyph) (zpb-ttf:ymin glyph)) scale)))
 
 (defun font-family (font-loader)
   (loop for entry across (zpb-ttf::name-entries font-loader)
@@ -473,26 +464,20 @@ based on current graphics port, CSS viewport and element's parent."
                ;; rel https://www.w3.org/TR/css-values/#relative-lengths
                ("em"   size)
                ("rem"  size)
-               ("ex"   (let ((bbox (vecto:string-bounding-box "x" size font)))
-                         (- (zpb-ttf:ymax bbox) (zpb-ttf:ymin bbox))))
-               ("rex"  (let ((bbox (vecto:string-bounding-box "x" size font)))
-                         (- (zpb-ttf:ymax bbox) (zpb-ttf:ymin bbox))))
-               ("cap"  (let ((bbox (vecto:string-bounding-box "O" size font)))
-                         (- (zpb-ttf:ymax bbox) (zpb-ttf:ymin bbox))))
-               ("ch"   (let ((bbox (vecto:string-bounding-box "0" size font)))
-                         (- (zpb-ttf:xmax bbox) (zpb-ttf:xmin bbox))))
-               ("rch"  (let ((bbox (vecto:string-bounding-box "0" size font)))
-                         (- (zpb-ttf:xmax bbox) (zpb-ttf:xmin bbox))))
-               ("ic"   (let ((bbox (vecto:string-bounding-box "　" size font)))
-                         (- (zpb-ttf:xmax bbox) (zpb-ttf:xmin bbox))))
-               ("ric"  (let ((bbox (vecto:string-bounding-box "　" size font)))
-                         (- (zpb-ttf:xmax bbox) (zpb-ttf:xmin bbox))))
                ;; FIXME: not precise value
-               ("lh"   (let ((bbox (vecto:string-bounding-box "M" size font)))
-                         (- (zpb-ttf:ymax bbox) (zpb-ttf:ymin bbox))))
-               ("rlh"  (let ((bbox (vecto:string-bounding-box "M" size font)))
-                         (- (zpb-ttf:ymax bbox) (zpb-ttf:ymin bbox))))
-                 
+               ("ex"   (get-glyph-height #\x font size))
+               ("rex"  (get-glyph-height #\x font size))
+               ("cap"  (get-glyph-height #\O font size))
+               ("ch"   (get-glyph-width #\0 font size))
+               ("rch"  (get-glyph-width #\0 font size))
+               ("ic"   (get-char-width #\ideographic-space font size))
+               ("ric"  (get-char-width #\ideographic-space font size))
+               ("lh"   (let* ((scale (vecto::loader-font-scale size font))
+                              (glyph (zpb-ttf:find-glyph "M" font)))
+                         (* (+ (zpb-ttf:advance-width glyph) (zpb-ttf:line-gap font)) scale)))
+               ("rlh"  (let* ((scale (vecto::loader-font-scale size font))
+                              (glyph (zpb-ttf:find-glyph "M" font)))
+                         (* (+ (zpb-ttf:advance-width glyph) (zpb-ttf:line-gap font)) scale)))
                ("vw"   (/ viewport-w 100d0))
                ("vi"   (/ viewport-w 100d0))
                ("vh"   (/ viewport-h 100d0))
@@ -1768,7 +1753,7 @@ element."
                     (setf (gethash "text-total-height" container-attributes)
                           (+ (gethash "text-total-height" container-attributes 0)
                              char-height))))
-                 (unless (serapeum:whitespacep char)
+                 (unless (whitespace-char-p char)
                    (let ((new-transform (make-transform)))
                      ;; ??? Why the path of string is mirrored @VECTO
                      (apply-translation new-transform (- x) (- y))
@@ -1988,10 +1973,10 @@ element."
                         viewbox
                       (let* ((new-x (if-let (val (gethash "x" new-attrs))
                                         (svg-parse-length val :width)
-                                      0d0))
+                                      0))
                              (new-y (if-let (val (gethash "y" new-attrs))
                                         (svg-parse-length val :height)
-                                      0d0))
+                                      0))
                              (new-w (svg-parse-length (gethash "width" new-attrs) :width))
                              (new-h (svg-parse-length (gethash "height" new-attrs) :height))
                              (transform (make-transform))
@@ -2057,9 +2042,10 @@ element."
                               (gethash "width" new-table) new-w
                               (gethash "height" new-table) new-h)
                         ;; Pack a drawing function
-                        (let ((funcs (delete nil (loop for child across (plump-dom:children node)
-                                                       when (plump-dom:element-p child)
-                                                         collect (create-renderer state child root-node new-table)))))
+                        (let ((funcs (loop for child across (plump-dom:children node)
+                                           for func = (when (plump-dom:element-p child)
+                                                        (create-renderer state child root-node new-table))
+                                           when func collect func)))
                           (lambda (state)
                             ;; If it's the out-most SVG element,
                             ;; and the graphics state has no underlying image representation,
@@ -2083,10 +2069,10 @@ element."
                                                           (gethash "xlink:href" new-attrs))))
                          (new-x (if-let (val (gethash "x" new-attrs))
                                     (svg-parse-length val :width)
-                                  0d0))
+                                  0))
                          (new-y (if-let (val (gethash "y" new-attrs))
                                     (svg-parse-length val :height)
-                                  0d0))
+                                  0))
                          (transform (if-let (val (gethash "svg-transform" container-attributes))
                                         (copy-transform val)
                                       (make-transform)))
@@ -2098,20 +2084,21 @@ element."
                                                       :tag-name (if (member child-tag '("def" "marker" "symbol"))
                                                                   "g" child-tag)
                                                       :children (plump:make-child-array)
-                                                      :attributes (plump:attributes node))))
-                    (declare (type double-float new-x new-y))
-                    ;; Move the left-top of the sub-graph to (x, y)
-                    (apply-translation transform new-x new-y)
-                    (setf (gethash "svg-transform" new-table) transform)
-                    (maphash (lambda (key val)
-                               (when (or (string= key "style")
-                                         (member key *svg-presentation-attributes* :test #'string=))
-                                 (plump:set-attribute shadow-child key val)))
-                             (plump:attributes child))
-                    (loop for child-child across (plump:children child)
-                          for copy = (plump-dom:clone-node child-child)
-                          do (plump-dom:append-child shadow-child copy))
-                    (create-renderer state shadow-child root-node new-table)))
+                                                      :attributes (plump:attributes child))))
+                    (if child
+                      (progn ; Move the left-top of the sub-graph to (x, y)
+                        (apply-translation transform new-x new-y)
+                        (setf (gethash "svg-transform" new-table) transform)
+                        (maphash (lambda (key val)
+                                   (when (or (string= key "style")
+                                             (member key *svg-presentation-attributes* :test #'string=))
+                                     (plump:set-attribute shadow-child key val)))
+                                 (plump:attributes child))
+                        (loop for child-child across (plump:children child)
+                              for copy = (plump-dom:clone-node child-child)
+                              do (plump-dom:append-child shadow-child copy))
+                        (create-renderer state shadow-child root-node new-table))
+                      (warn "The element ~A referenced by ~A not found" id node))))
                  (t
                   (let ((funcs (delete nil (loop for child across (plump-dom:children node)
                                                  when (plump-dom:element-p child)
@@ -2140,6 +2127,9 @@ using ZPNG:WRITE-PNG."
         (vecto:save-png-stream output)
         (vecto:save-png output))
       (vecto::clear-state vecto::*graphics-state*))))
+
+
+;; Test and scratch
 
 (defparameter *interactive-tests*
   '(("Text and tspan" "https://www.w3.org/TR/2018/CR-SVG2-20181004/images/text/tspan01.svg")
